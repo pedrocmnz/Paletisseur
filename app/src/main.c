@@ -33,8 +33,9 @@ static void     publish                  (subscribe_message_t *subs);
 
 
 // FreeRTOS tasks
+void vTask_Up        (void *pvParameters);
 void vTask_Palette   (void *pvParameters);
-//void vTask_Clamper   (void *pvParameters);
+void vTask_Clamper   (void *pvParameters);
 void vTask_Write     (void *pvParameters);
 void vTask_Read      (void *pvParameters);
 
@@ -42,16 +43,7 @@ void vTask_Read      (void *pvParameters);
 xQueueHandle	 xCommandeQueue;
 xQueueHandle     xSubscribeQueue;
 xSemaphoreHandle sems[MAX_SEMAPHORE];
-xSemaphoreHandle xSem_DMA_TC;
-xSemaphoreHandle xConsoleMutex;
-
-// Define Event Group flags
-//#define	BIT_RED	    ( (EventBits_t)( 0x01 <<0) )   // This is not mandatory but it provides
-//#define BIT_GREEN	( (EventBits_t)( 0x01 <<1) )   // friendly alias for individual event
-//#define BIT_BLUE	( (EventBits_t)( 0x01 <<2) )
-
-// Trace User Events Channels
-// traceString ue1;
+xSemaphoreHandle xSem_Sync;
 
 // Global variables
 static uint32_t actuator_state = 0;
@@ -71,9 +63,6 @@ int main()
 	my_printf("\r\nConsole Ready!\r\n");
 	my_printf("SYSCLK = %d Hz\r\n", SystemCoreClock);
 
-	// Initialize NVIC
-	// BSP_NVIC_Init();
-
 	// Start Trace Recording
 	xTraceEnable(TRC_START);
 
@@ -86,25 +75,20 @@ int main()
 	vTraceSetQueueName(xSubscribeQueue, "Subscribe Queue");
 
 	// Create Semaphore object
-	//xSem_DMA_TC =  xSemaphoreCreateBinary();
+	xSem_Sync =  xSemaphoreCreateBinary();
 	for(uint8_t i = 0; i < MAX_SEMAPHORE; i++) {
 		sems[i] = xSemaphoreCreateBinary();
 	}
 
 	// Give a name to the Semaphore in the trace recorder
-	//vTraceSetSemaphoreName(xSem_DMA_TC, "xSemDMA_TC");
-
-	// Create a Mutex for accessing the console
-	//xConsoleMutex = xSemaphoreCreateMutex();
-
-	// Give a nice name to the Mutex in the trace recorder
-	//vTraceSetMutexName(xConsoleMutex, "Console Mutex");
+	vTraceSetSemaphoreName(xSem_Sync, "xSem_Sync");
 
 	// Create Tasks
-	xTaskCreate(vTask_Palette, "Task_Palette", 256, NULL, 1, NULL);
-	//xTaskCreate(vTask_Clamper, "Task_Clamper", 256, NULL, 1, NULL);
-	xTaskCreate(vTask_Read,    "Task_Read",    256, NULL, 2, NULL);
-	xTaskCreate(vTask_Write,   "Task_Write",   256, NULL, 3, NULL);
+	xTaskCreate(vTask_Up,      "Task_Up",      128, NULL, 1, NULL);
+	xTaskCreate(vTask_Clamper, "Task_Clamper", 256, NULL, 2, NULL);
+	xTaskCreate(vTask_Palette, "Task_Palette", 128, NULL, 1, NULL);
+	xTaskCreate(vTask_Read,    "Task_Read",    128, NULL, 3, NULL);
+	xTaskCreate(vTask_Write,   "Task_Write",   128, NULL, 4, NULL);
 
 	// Start the Scheduler
 	vTaskStartScheduler();
@@ -112,6 +96,122 @@ int main()
 	while(1)
 	{
 		// No code here
+	}
+}
+
+/*
+ * Task_Up
+ */
+
+void vTask_Up(void *pvParameters)
+{
+	uint8_t count=0;
+
+	writing(1, CARTON);
+	writing(1, BLOCAGE);
+
+	while(1)
+    {
+		// Subscribe to receive an semaphore when the sensor changes
+		subscribe(1, CARTONDISTRIBUE, 0);
+		xSemaphoreTake(sems[CARTONDISTRIBUE], portMAX_DELAY);
+		writing(1, TAPISCARTON);
+
+		subscribe(1, CARTONENVOYE, 0);
+		xSemaphoreTake(sems[CARTONENVOYE], portMAX_DELAY);
+
+		writing(1, TAPISCARTONPALET);
+
+		subscribe(1, CARTONENVOYE, 1);
+		xSemaphoreTake(sems[CARTONENVOYE], portMAX_DELAY);
+
+		subscribe(1, CARTONENVOYE, 0);
+		xSemaphoreTake(sems[CARTONENVOYE], portMAX_DELAY);
+
+		writing(0, CARTON);
+
+		subscribe(1, CARTONENVOYE, 1);  // Aguarda a transição de 0 para 1
+		xSemaphoreTake(sems[CARTONENVOYE], portMAX_DELAY);
+
+		writing(0, TAPISCARTON);
+
+		subscribe(1, ENTREEPALETIZOR, 0);
+		xSemaphoreTake(sems[ENTREEPALETIZOR], portMAX_DELAY);
+
+		subscribe(1, ENTREEPALETIZOR, 1);
+		xSemaphoreTake(sems[ENTREEPALETIZOR], portMAX_DELAY);
+
+		subscribe(1, ENTREEPALETIZOR, 0);
+		xSemaphoreTake(sems[ENTREEPALETIZOR], portMAX_DELAY);
+
+		writing(0, BLOCAGE);
+		writing(1, CHARGERPALET);
+
+		subscribe(1, ENTREEPALETIZOR, 1);
+		xSemaphoreTake(sems[ENTREEPALETIZOR], portMAX_DELAY);
+
+		vTaskDelay(1100);
+		writing(1, POUSSOIR);
+
+		subscribe(1, LIMITEPOUSSOIR, 0);
+		xSemaphoreTake(sems[LIMITEPOUSSOIR], portMAX_DELAY);
+
+		subscribe(1, LIMITEPOUSSOIR, 1);
+		xSemaphoreTake(sems[LIMITEPOUSSOIR], portMAX_DELAY);
+
+		writing(1, BLOCAGE);
+		writing(0, POUSSOIR);
+		writing(1, CARTON);
+
+		// When there is 6 boxes in the elevator, send a semaphore to the clamper task
+		count++;
+		if(count == 3) {
+			xSemaphoreGive(xSem_Sync);
+			count = 0;
+		}
+
+    }
+}
+
+/*
+ *	Task to control the clamper and the door
+ */
+
+void vTask_Clamper (void *pvParameters)
+{
+	while(1)
+	{
+		// Wait for the Up task semaphore
+		xSemaphoreTake(xSem_Sync, portMAX_DELAY);
+
+		writing(1, clamp);
+
+		subscribe(1, clamped, 0);
+		xSemaphoreTake(sems[clamped], portMAX_DELAY);
+
+		writing(1, porte);
+
+		subscribe(1, ascenseur_etage_1, 0);
+		xSemaphoreTake(sems[ascenseur_etage_1], portMAX_DELAY);
+
+		writing(0, porte);
+		writing(0, clamp);
+
+		// Wait for the Up task semaphore
+		xSemaphoreTake(xSem_Sync, portMAX_DELAY);
+
+		writing(1, clamp);
+
+		subscribe(1, clamped, 0);
+		xSemaphoreTake(sems[clamped], portMAX_DELAY);
+
+		writing(1, porte);
+
+		subscribe(1, ascenseur_etage_2, 0);
+		xSemaphoreTake(sems[ascenseur_etage_2], portMAX_DELAY);
+
+		writing(0, porte);
+		writing(0, clamp);
 	}
 }
 
@@ -132,9 +232,6 @@ void vTask_Palette (void *pvParameters)
 
 		writing(0, distribuition_palette);
 
-		//while (FACTORY_IO_Sensors_Get(1 << entree_palette)==0);
-
-		my_printf("Esperando sensor entree_palette \r\n");
 		//Send a subscribe and wait for a response from the read task
 		subscribe(1, entree_palette, 1);
 		xSemaphoreTake(sems[entree_palette],portMAX_DELAY);
@@ -143,17 +240,12 @@ void vTask_Palette (void *pvParameters)
 		writing(0, tapis_palette_vers_ascenseur);
 		writing(1, charger_palette);
 
-		//while (FACTORY_IO_Sensors_Get(1 << sortie_palette)==0);
-
-		my_printf("Esperando sensor sortie_palette");
-		subscribe(1, sortie_palette, 1);
-		xSemaphoreTake(sems[sortie_palette],portMAX_DELAY);
+		subscribe(1, entree_palette, 0);
+		xSemaphoreTake(sems[entree_palette],portMAX_DELAY);
 
 		writing(0, charger_palette);
 		writing(1, monter_ascenseur);
 		writing(1, ascenseur_to_limit);
-
-		//while (FACTORY_IO_Sensors_Get(1 << ascenseur_etage_1)==0);
 
 		subscribe(1, ascenseur_etage_1, 1);
 		xSemaphoreTake(sems[ascenseur_etage_1],portMAX_DELAY);
@@ -161,17 +253,18 @@ void vTask_Palette (void *pvParameters)
 		writing(0, monter_ascenseur);
 		writing(0, ascenseur_to_limit);
 
-		//while(IsSensorActive(porte_ouverte)==1);
-		while(BSP_PB_GetState() == 0);
+		subscribe(1, porte_ouverte, 1);
+		xSemaphoreTake(sems[porte_ouverte],portMAX_DELAY);
 
 		writing(1, descendre_ascenseur);
 
-		//while(IsSensorActive(porte_ouverte)==1);
-		while(BSP_PB_GetState() == 1);
+		subscribe(1, limite_porte, 1);
+		xSemaphoreTake(sems[limite_porte],portMAX_DELAY);
+
+		subscribe(1, porte_ouverte, 1);
+		xSemaphoreTake(sems[porte_ouverte],portMAX_DELAY);
 
 		writing(1, ascenseur_to_limit);
-
-		//while (FACTORY_IO_Sensors_Get(1 << ascenseur_etage_rdc)==0);
 
 		subscribe(1, ascenseur_etage_rdc, 1);
 		xSemaphoreTake(sems[ascenseur_etage_rdc],portMAX_DELAY);
@@ -184,44 +277,11 @@ void vTask_Palette (void *pvParameters)
 }
 
 /*
- *	Task to control the clamper and the door
- */
-/*
-void vTask_Clamper (void *pvParameters)
-{
-	while(1)
-	{
-		ActivateActuator(poussoir);
-
-		while(BSP_PB_GetState() == 0);
-
-		while(IsSensorActive(limite_poussoir)==0);
-		DeactivateActuator(poussoir);
-		ActivateActuator(clamp);
-		while(IsSensorActive(clamped)==0);
-		DeactivateActuator(clamp);
-
-		ActivateActuator(porte);
-		while(IsSensorActive(ascenseur_en_mouvement)==0);
-		DeactivateActuator(porte);
-
-		while(IsSensorActive(limite_porte)==1);
-	}
-}
-*/
-
-/*
  *	Task_Write
  */
 
 void vTask_Write (void *pvParameters)
 {
-	// Set DMA interrupt priority
-	//NVIC_SetPriority(DMA1_Channel4_5_6_7_IRQn, configMAX_API_CALL_INTERRUPT_PRIORITY + 1);
-
-	// Enable DMA interrupt on NVIC
-	//NVIC_EnableIRQ(DMA1_Channel4_5_6_7_IRQn);
-
 	// Read all states from the scene
 	FACTORY_IO_update();
 
@@ -235,9 +295,6 @@ void vTask_Write (void *pvParameters)
 		// Wait for something in the message Queue
 		xQueueReceive(xCommandeQueue, &actuator, portMAX_DELAY);
 
-		// Take Mutex
-		//xSemaphoreTake(xConsoleMutex, portMAX_DELAY);
-
 		if(actuator.on_off == 1) {
 			// Activate the actuator
 			ActivateActuator(actuator.actuator);
@@ -247,8 +304,6 @@ void vTask_Write (void *pvParameters)
 			// Deactivate the actuator
 			DeactivateActuator(actuator.actuator);
 		}
-		// Release Mutex
-		//xSemaphoreGive(xConsoleMutex);
 	}
 }
 
@@ -258,12 +313,6 @@ void vTask_Write (void *pvParameters)
 
 void vTask_Read (void *pvParameters)
 {
-	// Set DMA interrupt priority on NVIC
-	//NVIC_SetPriority(DMA1_Channel4_5_6_7_IRQn, configMAX_API_CALL_INTERRUPT_PRIORITY + 1);
-
-	// Enable DMA interrupt on NVIC
-	//NVIC_EnableIRQ(DMA1_Channel4_5_6_7_IRQn);
-
 	BaseType_t subscription_received;
 
 	// Initialize timing
@@ -292,17 +341,9 @@ void vTask_Read (void *pvParameters)
 			// Print the table in the console
 			print_subscription_table(subscription_table);
 		}
-		// Take Mutex
-		//xSemaphoreTake(xConsoleMutex, portMAX_DELAY);
-
-		//Wait for sensor interrupt
-		//xSemaphoreTake(xSem_DMA_TC, portMAX_DELAY);
 
 		// Verify and tell the respective Task when the sensor triggers
 		publish(subscription_table);
-
-		// Release Mutex
-		//xSemaphoreGive(xConsoleMutex);
 
 		vTaskDelayUntil (&xLastWakeTime, (200/portTICK_RATE_MS));
 	}

@@ -99,28 +99,3 @@ void HardFault_Handler(void)
 /*  file (startup_stm32f0xx.s).                                               */
 /******************************************************************************/
 
-/*
- * This function handles USART2 DMA interrupts
- */
-
-extern xSemaphoreHandle xSem_DMA_TC;
-
-void DMA1_Channel4_5_6_7_IRQnHandler(void)
-{
-	// Test if the DMA TC interrupt happened
-	if (DMA1->ISR & DMA_ISR_TCIF5)
-	{
-		// Clear flags
-		DMA1->IFCR |= DMA_IFCR_CTCIF5;
-
-		// Imediate change in context
-		BaseType_t xHigherPriorityTaskWoken = pdFALSE;
-
-		// Release the semaphore
-		xSemaphoreGiveFromISR(xSem_DMA_TC, &xHigherPriorityTaskWoken);
-
-		// Force a change in context if needed
-		portEND_SWITCHING_ISR(xHigherPriorityTaskWoken);
-	}
-}
-

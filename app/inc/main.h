@@ -12,6 +12,24 @@
 #define SUBSCRIPTION_EMPTY 0xFF		// Correction for the case whith sensor 0
 #define MAX_SEMAPHORE 20            // Number of subscribe semaphores
 
+//Sensors Up_Task
+#define CARTONDISTRIBUE     0
+#define CARTONENVOYE        1
+#define ENTREEPALETIZOR     2
+#define PORTEOUVERTE		3
+#define LIMITEPOUSSOIR		4
+#define CLAMPED				5
+
+//Actuators Up_Task
+#define CARTON              0
+#define TAPISCARTON         1
+#define BLOCAGE             2
+#define PORTE				3
+#define POUSSOIR			4
+#define CLAMP				5
+#define TAPISCARTONPALET    12
+#define CHARGERPALET		16
+
 //Sensors Palette
 #define ascenseur_etage_rdc 6
 #define entree_palette 13
